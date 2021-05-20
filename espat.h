@@ -46,7 +46,7 @@ typedef struct {
     TZDataFunc Send;
 } EspATLoadParam;
 
-#pragma pack(0)
+#pragma pack()
 
 // EspATLoad Ä£¿éÔØÈë
 void EspATLoad(EspATLoadParam param);

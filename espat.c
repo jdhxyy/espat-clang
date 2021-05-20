@@ -113,7 +113,7 @@ void EspATLoad(EspATLoadParam param) {
         LE(ESPAT_TAG, "load failed!create observer list failed");
     }
 
-    TZATRegisterUrc(handle, "+IPD,", "\r\n", TZ_BUFFER_TINY_LEN, dealUrcReceive);
+    TZATRegisterUrc(handle, "+IPD,", ":", TZ_BUFFER_TINY_LEN, dealUrcReceive);
     TZATRegisterUrc(handle, "busy p", "\r\n", TZ_BUFFER_TINY_LEN, dealUrcBusyP);
     TZATRegisterUrc(handle, "busy s", "\r\n", TZ_BUFFER_TINY_LEN, dealUrcBusyS);
     TZATRegisterUrc(handle, "WIFI DISCONNECT", "\r\n", TZ_BUFFER_TINY_LEN, dealUrcWifiDisconnect);
@@ -129,9 +129,34 @@ void EspATLoad(EspATLoadParam param) {
 static void dealUrcReceive(uint8_t* bytes, int size) {
     TZ_UNUSED(size);
     int port = 0;
-    sscanf((char*)bytes, "%d,%s,%d", &rxHead.len, rxHead.ip, &port);
+    int ip[4] = {0};
+    static bool mode = false;
+    
+    // 兼容ip带引号与不带引号两种
+    if (mode) {
+        sscanf((char*)bytes, "%d,%d.%d.%d.%d,%d", &rxHead.len, &ip[0], &ip[1], &ip[2], &ip[3], &port);
+        if (ip[0] == 0 || port == 0) {
+            sscanf((char*)bytes, "%d,\"%d.%d.%d.%d\",%d", &rxHead.len, &ip[0], &ip[1], &ip[2], &ip[3], &port);
+            if (ip[0] == 0 || port == 0) {
+                return;
+            }
+            mode = false;
+        }
+    } else {
+        sscanf((char*)bytes, "%d,\"%d.%d.%d.%d\",%d", &rxHead.len, &ip[0], &ip[1], &ip[2], &ip[3], &port);
+        if (ip[0] == 0 || port == 0) {
+            sscanf((char*)bytes, "%d,%d.%d.%d.%d,%d", &rxHead.len, &ip[0], &ip[1], &ip[2], &ip[3], &port);
+            if (ip[0] == 0 || port == 0) {
+                return;
+            }
+            mode = true;
+        }
+    }
+    
     rxHead.port = (uint16_t)port;
-    TZATSetWaitDataCallback(handle, rxHead.len, SEND_TIMEOUT, receiveData);
+    if (rxHead.len > 0 && rxHead.port != 0) {
+        TZATSetWaitDataCallback(handle, rxHead.len, SEND_TIMEOUT, receiveData);
+    }
 }
 
 static void receiveData(TZATRespResult result, uint8_t* bytes, int size) {
@@ -238,7 +263,7 @@ static int reset(void) {
     }
 
     LI(ESPAT_TAG, "soft reset start!");
-    respHandle = TZATCreateResp(TZ_BUFFER_LEN, 0, CONNECT_WIFI_TIMEOUT);
+    respHandle = TZATCreateResp(TZ_BUFFER_LEN, 0, CMD_TIMEOUT);
     if (respHandle == 0) {
         LE(ESPAT_TAG, "soft reset failed!create resp failed!");
         PT_EXIT(&pt);
@@ -335,16 +360,29 @@ static int configParam(bool* result) {
         PT_EXIT(&pt);
     }
 
+    // 关闭回显
+    LI(ESPAT_TAG, "close echo");
     PT_WAIT_THREAD(&pt, TZATExecCmd(handle, respHandle, "ATE0\r\n"));
     if (TZATRespGetLineByKeyword(respHandle, "OK") == false) {
         LE(ESPAT_TAG, "close echo failed!no ack!");
         TZATDeleteResp(respHandle);
         PT_EXIT(&pt);
     }
+    
+    // 关闭上电自动连接
+    LI(ESPAT_TAG, "stop auto connect");
+    PT_WAIT_THREAD(&pt, TZATExecCmd(handle, respHandle, "AT+CWAUTOCONN=0\r\n"));
+    if (TZATRespGetLineByKeyword(respHandle, "OK") == false) {
+        LE(ESPAT_TAG, "stop auto connect failed!no ack!");
+        TZATDeleteResp(respHandle);
+        PT_EXIT(&pt);
+    }
 
+    // 显示对端IP和端口
+    LI(ESPAT_TAG, "show dst ip and port");
     PT_WAIT_THREAD(&pt, TZATExecCmd(handle, respHandle, "AT+CIPDINFO=1\r\n"));
     if (TZATRespGetLineByKeyword(respHandle, "OK") == false) {
-        LE(ESPAT_TAG, "cipdinfo failed!no ack!");
+        LE(ESPAT_TAG, "show dst ip and port failed!no ack!");
         TZATDeleteResp(respHandle);
         PT_EXIT(&pt);
     }
@@ -363,7 +401,7 @@ static int connectWifi(bool* result) {
     LI(ESPAT_TAG, "connect wifi.ssid:%s", loadParam.WifiSsid);
     *result = false;
 
-    respHandle = TZATCreateResp(TZ_BUFFER_LEN, 0, CONNECT_WIFI_TIMEOUT);
+    respHandle = TZATCreateResp(TZ_BUFFER_LEN, 0, CONNECT_WIFI_TIMEOUT * 1000);
     if (respHandle == 0) {
         LE(ESPAT_TAG, "connect wifi failed!create resp failed!");
         PT_EXIT(&pt);
@@ -392,7 +430,8 @@ static int connectWifi(bool* result) {
         TZATDeleteResp(respHandle);
         PT_EXIT(&pt);
     }
-
+    
+    LI(ESPAT_TAG, "connect wifi success!");
     TZATDeleteResp(respHandle);
     *result = true;
     PT_END(&pt);
@@ -424,6 +463,10 @@ static int sendTask(void) {
             PT_EXIT(&pt);
         }
     }
+    
+    if (TZATIsBusy(handle)) {
+        PT_EXIT(&pt);
+    }
 
     // 发送数据
     TZATSetEndSign(handle, '>');
@@ -431,7 +474,7 @@ static int sendTask(void) {
     PT_WAIT_THREAD(&pt, TZATExecCmd(handle, respHandle, "AT+CIPSEND=%d,\"%s\",%d\r\n", item->buffer->len, item->ip, item->port));
     TZATSetEndSign(handle, '\0');
 
-    if (TZATRespGetResult(respHandle) == false) {
+    if (TZATRespGetResult(respHandle) != TZAT_RESP_RESULT_OK) {
         LE(ESPAT_TAG, "send failed!no ack >");
         TZATDeleteResp(respHandle);
         PT_EXIT(&pt);
@@ -444,6 +487,10 @@ static int sendTask(void) {
     if (isSendOK == false) {
         LW(ESPAT_TAG, "send failed!timeout!");
     }
+    
+    // 删除节点
+    TZFree(item->buffer);
+    TZListRemove(list, node);
 
     PT_END(&pt);
 }
@@ -471,7 +518,7 @@ static int checkConnectStatus(void) {
 
     PT_BEGIN(&pt);
 
-    PT_WAIT_UNTIL(&pt, isStartProperly);
+    PT_WAIT_UNTIL(&pt, isStartProperly && TZATIsBusy(handle) == false);
 
     if (respHandle == 0) {
         respHandle = TZATCreateResp(TZ_BUFFER_LEN, 0, CMD_TIMEOUT);
@@ -482,7 +529,7 @@ static int checkConnectStatus(void) {
     }
 
     PT_WAIT_THREAD(&pt, TZATExecCmd(handle, respHandle, "AT+CIPSTATUS\r\n"));
-    if (TZATRespGetResult(respHandle) == false) {
+    if (TZATRespGetResult(respHandle) != TZAT_RESP_RESULT_OK) {
         isStartProperly = false;
         LW(ESPAT_TAG, "connect status offline!no ack!");
         PT_EXIT(&pt);
