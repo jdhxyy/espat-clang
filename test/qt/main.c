@@ -40,7 +40,7 @@ int main() {
     param.SetBaudRate = setBaudRate;
     param.Send = tzatSend;
     param.IsAllowSend = tzatIsAllowSend;
-    EspATLoad(param);
+    EspATLoad(&param);
 
     while (1) {
         AsyncRun();

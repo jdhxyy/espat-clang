@@ -34,14 +34,14 @@
 
 // 发送单元
 typedef struct {
-    char ip[32];
+    uint8_t ip[4];
     uint16_t port;
     TZBufferDynamic* buffer;
 } tItem;
 
 // 接收头
 typedef struct {
-    char ip[32];
+    uint8_t ip[4];
     uint16_t port;
     int len;
 } tRxHead;
@@ -89,7 +89,7 @@ static TZListNode* createNode(void);
 static bool isExistObserver(EspATRxCallback callback);
 
 // EspATLoad 模块载入
-void EspATLoad(EspATLoadParam param) {
+void EspATLoad(EspATLoadParam* param) {
     if (mid == -1) {
         mid = TZMallocRegister(0, ESPAT_TAG, ESPAT_MALLOC_SIZE);
         if (mid == -1) {
@@ -98,7 +98,7 @@ void EspATLoad(EspATLoadParam param) {
         }
     }
 
-    handle = TZATCreate(param.Send, param.IsAllowSend);
+    handle = TZATCreate(param->Send, param->IsAllowSend);
     if (handle == 0) {
         LE(ESPAT_TAG, "load failed!create at object failed!");
         return;
@@ -123,7 +123,7 @@ void EspATLoad(EspATLoadParam param) {
     AsyncStart(sendTask, ASYNC_NO_WAIT);
     AsyncStart(checkConnectStatus, ASYNC_MINUTE);
 
-    loadParam = param;
+    loadParam = *param;
 }
 
 static void dealUrcReceive(uint8_t* bytes, int size) {
@@ -153,6 +153,9 @@ static void dealUrcReceive(uint8_t* bytes, int size) {
         }
     }
     
+    for (int i = 0; i < 4; i++) {
+        rxHead.ip[i] = (uint8_t)ip[i];
+    }
     rxHead.port = (uint16_t)port;
     if (rxHead.len > 0 && rxHead.port != 0) {
         TZATSetWaitDataCallback(handle, rxHead.len, SEND_TIMEOUT, receiveData);
@@ -443,6 +446,7 @@ static int sendTask(void) {
     static tItem* item = NULL;
     static intptr_t respHandle = 0;
     static uint64_t time = 0;
+    static char ip[TZ_BUFFER_TINY_LEN] = {0};
 
     PT_BEGIN(&pt);
 
@@ -471,7 +475,8 @@ static int sendTask(void) {
     // 发送数据
     TZATSetEndSign(handle, '>');
     item = (tItem*)node->Data;
-    PT_WAIT_THREAD(&pt, TZATExecCmd(handle, respHandle, "AT+CIPSEND=%d,\"%s\",%d\r\n", item->buffer->len, item->ip, item->port));
+    sprintf(ip, "%d.%d.%d.%d", item->ip[0], item->ip[1], item->ip[2], item->ip[3]);
+    PT_WAIT_THREAD(&pt, TZATExecCmd(handle, respHandle, "AT+CIPSEND=%d,\"%s\",%d\r\n", item->buffer->len, ip, item->port));
     TZATSetEndSign(handle, '\0');
 
     if (TZATRespGetResult(respHandle) != TZAT_RESP_RESULT_OK) {
@@ -555,7 +560,8 @@ void EspATReceive(uint8_t* data, int size) {
 }
 
 // EspATSend 发送数据
-void EspATSend(uint8_t* data, int size, char* ip, uint16_t port) {
+// ip是目标地址,4字节数组
+void EspATSend(uint8_t* data, int size, uint8_t* ip, uint16_t port) {
     if (isStartProperly == false) {
         LW(ESPAT_TAG, "esp at send failed!is not start properly!");
         return;
@@ -575,7 +581,7 @@ void EspATSend(uint8_t* data, int size, char* ip, uint16_t port) {
         return;
     }
 
-    strcpy(item->ip, ip);
+    memcpy(item->ip, ip, 4);
     item->port = port;
     memcpy(item->buffer->buf, data, (size_t)size);
     item->buffer->len = size;

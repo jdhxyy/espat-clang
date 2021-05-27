@@ -14,25 +14,22 @@
 #define ESPAT_BAUD_RATE_DEFAULT 115200
 
 // EspATRxCallback 接收回调函数
-typedef void (*EspATRxCallback)(uint8_t* data, int size, const char* ip, uint16_t port);
+// ip是源地址,4字节数组
+typedef void (*EspATRxCallback)(uint8_t* data, int size, uint8_t* ip, uint16_t port);
 
 #pragma pack(1)
 
 // EspATSetBaudrate 设置串口波特率
 typedef void (*EspATSetBaudrate)(int baudRate);
 
-// TZDrvAir724UGLoadParam 载入参数
+// EspATLoadParam 载入参数
 typedef struct {
     // 波特率
     int BaudRate;
 
     // WIFI热点信息
-    char WifiSsid[32];
-    char WifiPwd[32];
-
-    // 核心网的ip和端口
-    char CoreIp[32];
-    uint16_t CorePort;
+    char WifiSsid[TZ_BUFFER_TINY_LEN];
+    char WifiPwd[TZ_BUFFER_TINY_LEN];
 
     // API接口
     // 设置复位脚电平.拉低复位.如果不需要可以设置为NULL
@@ -49,13 +46,14 @@ typedef struct {
 #pragma pack()
 
 // EspATLoad 模块载入
-void EspATLoad(EspATLoadParam param);
+void EspATLoad(EspATLoadParam* param);
 
 // EspATReceive 接收数据.用户模块接收到数据后需调用本函数
 void EspATReceive(uint8_t* data, int size);
 
 // EspATSend 发送数据
-void EspATSend(uint8_t* data, int size, char* ip, uint16_t port);
+// ip是目标地址,4字节数组
+void EspATSend(uint8_t* data, int size, uint8_t* ip, uint16_t port);
 
 // EspATRegisterObserver 注册接收观察者
 bool EspATRegisterObserver(EspATRxCallback callback);
